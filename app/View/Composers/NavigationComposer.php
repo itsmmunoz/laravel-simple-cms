@@ -15,13 +15,17 @@ class NavigationComposer
 
     public function compose(View $view): void
     {
-        $pages = cache()->remember('nav_pages', 300, fn () => Page::published()
+        $cached = cache()->remember('nav_pages', 300, fn () => Page::published()
             ->roots()
             ->orderBy('sort_order')
-            ->get());
+            ->get(['slug', 'title'])
+            ->map(fn (Page $p) => ['slug' => $p->slug, 'title' => $p->title])
+            ->all());
+
+        $pages = collect($cached)->map(fn (array $a) => (object) $a);
 
         $view->with([
-            'navPages' => $pages->filter(fn ($p) => ! in_array($p->slug, self::$footerOnlySlugs)),
+            'navPages' => $pages->reject(fn ($p) => in_array($p->slug, self::$footerOnlySlugs)),
             'footerPages' => $pages->filter(fn ($p) => in_array($p->slug, self::$footerOnlySlugs)),
         ]);
     }

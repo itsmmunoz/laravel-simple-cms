@@ -1,6 +1,6 @@
 # Simple CMS
 
-A beginner-friendly content management system built with Laravel 12, Filament 5, DaisyUI 5, and Lucide Icons.
+A beginner-friendly content management system built with Laravel 13, Filament 5, DaisyUI 5, and Lucide Icons.
 Designed as a learning resource and starter template for those new to Laravel or Filament. Works great
 with AI coding assistants like Claude Code.
 
@@ -183,9 +183,9 @@ Static pages for content like About, Contact, Privacy Policy, etc. Each page has
 The CMS supports two user roles:
 
 - **Admin** - Full access to all features including user management. Can see and manage all content regardless of ownership
-- **Editor** - Can manage articles, categories, and pages (no user management). Can only see and edit their own content
+- **Editor** - Can manage articles, categories, and pages (no user management). Can see and edit content they own plus orphaned content — records whose original owner was deleted, so they aren't permanently locked from anyone but admins
 
-Content ownership is tracked via `user_id` on articles, pages, and media. A single `OwnerablePolicy` enforces that editors can only update/delete their own resources, while admins have full access. Deleting a user preserves their content (ownership is set to null).
+Content ownership is tracked via `user_id` on articles, pages, and media. The `OwnerablePolicy` and the shared `BelongsToOwner` trait (which adds a `visibleTo()` query scope to `Article`, `Page`, `Media`, and `MediaItem`) keep authorization and listing in sync — both follow the same own-or-orphan rule. Deleting a user preserves their content (ownership is set to null via `nullOnDelete`), and other editors can then take over those records (`forceDelete` stays admin-only).
 
 ### Analytics Dashboard
 
@@ -195,6 +195,8 @@ The admin dashboard includes:
 - **Article Views Chart** - Line chart showing daily views over 30 days
 - **Top Articles** - Most viewed articles table
 - **Recent Articles** - Latest article updates
+
+All four widgets respect ownership scoping: editors see their own content (plus orphans), admins see everything. The "Total Users" stat is admin-only. Stats are cached per user for 60 seconds and invalidated automatically on relevant content changes or role updates.
 
 ### Admin Resources
 

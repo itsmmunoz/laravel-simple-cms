@@ -60,6 +60,20 @@ class User extends Authenticatable implements FilamentUser
         ];
     }
 
+    protected static function booted(): void
+    {
+        // The cached dashboard payload differs by role (admins get extra user-count keys).
+        // If we don't bust the cache when role changes, the next render of StatsOverview
+        // will hit the old payload and throw an undefined array key for `totalUsers`.
+        static::saved(function (User $user) {
+            if ($user->wasChanged('role')) {
+                cache()->forget('dashboard_stats:'.$user->id);
+            }
+        });
+
+        static::deleted(fn (User $user) => cache()->forget('dashboard_stats:'.$user->id));
+    }
+
     /**
      * @param \Filament\Panel $panel
      *

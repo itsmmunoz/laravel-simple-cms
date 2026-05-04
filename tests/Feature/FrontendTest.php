@@ -152,3 +152,21 @@ it('shows published pages in navigation', function () {
 
     $this->get('/')->assertOk()->assertSee('Contact');
 });
+
+it('caches navigation pages as plain arrays, not Eloquent objects', function () {
+    cache()->forget('nav_pages');
+
+    Page::create([
+        'title' => 'Contact',
+        'slug' => 'contact',
+        'content' => 'Contact us',
+        'is_published' => true,
+    ]);
+
+    $this->get('/')->assertOk();
+
+    $cached = cache()->get('nav_pages');
+    expect($cached)->toBeArray()->not->toBeEmpty();
+    expect($cached[0])->toBeArray()
+        ->and($cached[0])->toHaveKeys(['slug', 'title']);
+});

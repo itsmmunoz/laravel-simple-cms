@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToOwner;
 use App\Models\Concerns\HasUniqueSlug;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -11,6 +12,7 @@ use Stevebauman\Purify\Facades\Purify;
 
 class Page extends Model
 {
+    use BelongsToOwner;
     use HasUniqueSlug;
 
     /**
@@ -62,8 +64,19 @@ class Page extends Model
             }
         });
 
-        static::saved(fn () => cache()->forget('nav_pages'));
-        static::deleted(fn () => cache()->forget('nav_pages'));
+        static::saved(function (Page $page) {
+            cache()->forget('nav_pages');
+            if ($page->user_id) {
+                cache()->forget('dashboard_stats:'.$page->user_id);
+            }
+        });
+
+        static::deleted(function (Page $page) {
+            cache()->forget('nav_pages');
+            if ($page->user_id) {
+                cache()->forget('dashboard_stats:'.$page->user_id);
+            }
+        });
     }
 
     /**

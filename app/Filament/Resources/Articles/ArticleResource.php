@@ -33,14 +33,7 @@ class ArticleResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        $query = parent::getEloquentQuery();
-
-        // Non-admin users can only see their own articles
-        if (auth()->check() && !auth()->user()->isAdmin()) {
-            $query->where('user_id', auth()->id());
-        }
-
-        return $query;
+        return parent::getEloquentQuery()->visibleTo(auth()->user());
     }
 
     public static function getRelations(): array

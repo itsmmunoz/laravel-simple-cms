@@ -678,6 +678,175 @@ describe('Ownership authorization', function () {
         $this->assertDatabaseHas('pages', ['id' => $adminPage->id]);
     });
 
+    it('allows editor to update and delete orphaned article (owner deleted)', function () {
+        $originalOwner = createUser(UserRole::Editor);
+        $orphan = Article::forceCreate([
+            'title' => 'Orphan', 'slug' => 'orphan-update',
+            'content' => '<p>C</p>', 'is_published' => true, 'user_id' => $originalOwner->id,
+        ]);
+        $originalOwner->delete();
+        $orphan->refresh();
+        expect($orphan->user_id)->toBeNull();
+
+        $editor = createUser(UserRole::Editor);
+        $this->actingAs($editor);
+        expect($editor->can('update', $orphan))->toBeTrue();
+        expect($editor->can('delete', $orphan))->toBeTrue();
+    });
+
+    it('allows editor to update and delete orphaned page (owner deleted)', function () {
+        $originalOwner = createUser(UserRole::Editor);
+        $orphan = Page::forceCreate([
+            'title' => 'Orphan Page', 'slug' => 'orphan-page',
+            'is_published' => true, 'user_id' => $originalOwner->id,
+        ]);
+        $originalOwner->delete();
+        $orphan->refresh();
+        expect($orphan->user_id)->toBeNull();
+
+        $editor = createUser(UserRole::Editor);
+        $this->actingAs($editor);
+        expect($editor->can('update', $orphan))->toBeTrue();
+        expect($editor->can('delete', $orphan))->toBeTrue();
+    });
+
+    it('still prevents editor from forceDeleting orphaned article', function () {
+        $originalOwner = createUser(UserRole::Editor);
+        $orphan = Article::forceCreate([
+            'title' => 'Orphan FD', 'slug' => 'orphan-fd',
+            'content' => '<p>C</p>', 'is_published' => false, 'user_id' => $originalOwner->id,
+        ]);
+        $originalOwner->delete();
+        $orphan->refresh();
+
+        $editor = createUser(UserRole::Editor);
+        $this->actingAs($editor);
+        expect($editor->can('forceDelete', $orphan))->toBeFalse();
+    });
+
+    it('visibleTo scope hides admin pages from editor (drives PageForm parent_id)', function () {
+        $admin = createUser(UserRole::Admin);
+        $editor = createUser(UserRole::Editor);
+
+        $adminPage = Page::forceCreate(['title' => 'Admin Parent', 'slug' => 'admin-parent', 'is_published' => true, 'user_id' => $admin->id]);
+        $editorPage = Page::forceCreate(['title' => 'Editor Parent', 'slug' => 'editor-parent', 'is_published' => true, 'user_id' => $editor->id]);
+
+        $visibleIds = Page::query()->visibleTo($editor)->pluck('id')->all();
+
+        expect($visibleIds)->toContain($editorPage->id)
+            ->and($visibleIds)->not->toContain($adminPage->id);
+    });
+
+    it('visibleTo scope returns everything to admin', function () {
+        $admin = createUser(UserRole::Admin);
+        $editor = createUser(UserRole::Editor);
+        $a = Page::forceCreate(['title' => 'A', 'slug' => 'vt-a', 'is_published' => true, 'user_id' => $admin->id]);
+        $b = Page::forceCreate(['title' => 'B', 'slug' => 'vt-b', 'is_published' => true, 'user_id' => $editor->id]);
+
+        $ids = Page::query()->visibleTo($admin)->pluck('id')->all();
+        expect($ids)->toContain($a->id, $b->id);
+    });
+
+    it('visibleTo scope includes orphans for editor', function () {
+        $editor = createUser(UserRole::Editor);
+        $owner = createUser(UserRole::Editor);
+        $orphan = Page::forceCreate(['title' => 'Orphaning', 'slug' => 'orphaning', 'is_published' => true, 'user_id' => $owner->id]);
+        $owner->delete();
+
+        $ids = Page::query()->visibleTo($editor)->pluck('id')->all();
+        expect($ids)->toContain($orphan->id);
+    });
+
+    it('saves to article invalidates editor dashboard_stats cache', function () {
+        $editor = createUser(UserRole::Editor);
+        cache()->put('dashboard_stats:'.$editor->id, ['totalArticles' => 99], 60);
+
+        Article::forceCreate([
+            'title' => 'Cache Buster', 'slug' => 'cache-buster',
+            'content' => '<p>C</p>', 'is_published' => true, 'user_id' => $editor->id,
+        ]);
+
+        expect(cache()->has('dashboard_stats:'.$editor->id))->toBeFalse();
+    });
+
+    it('saves to page invalidates editor dashboard_stats and nav_pages cache', function () {
+        $editor = createUser(UserRole::Editor);
+        cache()->put('dashboard_stats:'.$editor->id, ['totalPages' => 99], 60);
+        cache()->put('nav_pages', [['slug' => 'stale', 'title' => 'Stale']], 300);
+
+        Page::forceCreate([
+            'title' => 'New Page', 'slug' => 'new-page-cache',
+            'is_published' => true, 'user_id' => $editor->id,
+        ]);
+
+        expect(cache()->has('dashboard_stats:'.$editor->id))->toBeFalse()
+            ->and(cache()->has('nav_pages'))->toBeFalse();
+    });
+
+    it('promoting editor to admin busts their dashboard_stats cache', function () {
+        $editor = createUser(UserRole::Editor);
+        cache()->put('dashboard_stats:'.$editor->id, ['totalArticles' => 5], 60);
+
+        $editor->role = UserRole::Admin;
+        $editor->save();
+
+        expect(cache()->has('dashboard_stats:'.$editor->id))->toBeFalse();
+    });
+
+    it('saving user without role change does not bust dashboard_stats cache', function () {
+        $editor = createUser(UserRole::Editor);
+        cache()->put('dashboard_stats:'.$editor->id, ['totalArticles' => 5], 60);
+
+        $editor->name = 'Updated Name';
+        $editor->save();
+
+        expect(cache()->has('dashboard_stats:'.$editor->id))->toBeTrue();
+    });
+
+    it('deleting user busts their dashboard_stats cache', function () {
+        $editor = createUser(UserRole::Editor);
+        cache()->put('dashboard_stats:'.$editor->id, ['totalArticles' => 5], 60);
+
+        $editor->delete();
+
+        expect(cache()->has('dashboard_stats:'.$editor->id))->toBeFalse();
+    });
+
+    it('policy treats stringified user_id as equal to int (MySQL safety)', function () {
+        $editor = createUser(UserRole::Editor);
+        $article = Article::forceCreate([
+            'title' => 'String Id', 'slug' => 'string-id-test',
+            'content' => '<p>C</p>', 'is_published' => true, 'user_id' => $editor->id,
+        ]);
+
+        // Simulate MySQL's PDO returning user_id as string by setting it explicitly
+        $article->setRawAttributes(array_merge($article->getAttributes(), ['user_id' => (string) $editor->id]));
+
+        $this->actingAs($editor);
+        expect($editor->can('update', $article))->toBeTrue();
+    });
+
+    it('editor can edit orphaned article via Filament after original owner deleted', function () {
+        $originalOwner = createUser(UserRole::Editor);
+        $article = Article::forceCreate([
+            'title' => 'Will Be Orphaned', 'slug' => 'will-be-orphaned',
+            'content' => '<p>C</p>', 'is_published' => false, 'user_id' => $originalOwner->id,
+        ]);
+        $originalOwner->delete();
+        $article->refresh();
+        expect($article->user_id)->toBeNull();
+
+        $newEditor = createUser(UserRole::Editor);
+        $this->actingAs($newEditor);
+
+        Livewire::test(EditArticle::class, ['record' => $article->getRouteKey()])
+            ->fillForm(['title' => 'Reclaimed'])
+            ->call('save')
+            ->assertHasNoFormErrors();
+
+        $this->assertDatabaseHas('articles', ['id' => $article->id, 'title' => 'Reclaimed']);
+    });
+
     it('bulk delete skips media editor does not own', function () {
         $admin = createUser(UserRole::Admin);
         $editor = createUser(UserRole::Editor);

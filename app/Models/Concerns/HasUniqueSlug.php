@@ -7,21 +7,22 @@ use Illuminate\Support\Str;
 
 trait HasUniqueSlug
 {
-    /**
-     * @param array $options
-     *
-     * @return bool
-     */
     public function save(array $options = []): bool
     {
         try {
             return parent::save($options);
         } catch (UniqueConstraintViolationException $e) {
-            // Slug collision from race condition — retry with a random suffix on insert only
-            if (! empty($this->slug) && ! $this->exists) {
-                $this->slug .= '-' . Str::lower(Str::random(5));
+            // Race condition: the slug we picked is now taken.
+            // Only retry if (a) we're inserting (not updating), (b) we have a slug to mutate,
+            // and (c) the violation is verifiably about the slug column — not some other unique
+            // constraint that happens to share the same exception type. Without (c) we'd silently
+            // mutate the slug for a totally unrelated failure.
+            if (! $this->exists && ! empty($this->slug) && static::where('slug', $this->slug)->exists()) {
+                $this->slug .= '-'.Str::lower(Str::random(5));
+
                 return parent::save($options);
             }
+
             throw $e;
         }
     }

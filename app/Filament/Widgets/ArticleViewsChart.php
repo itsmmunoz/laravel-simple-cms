@@ -2,6 +2,7 @@
 
 namespace App\Filament\Widgets;
 
+use App\Models\Article;
 use App\Models\ArticleView;
 use Filament\Widgets\ChartWidget;
 use Illuminate\Support\Carbon;
@@ -27,7 +28,13 @@ class ArticleViewsChart extends ChartWidget
     {
         $startDate = Carbon::today()->subDays(29);
 
-        $viewsByDate = ArticleView::where('viewed_at', '>=', $startDate)
+        $query = ArticleView::where('viewed_at', '>=', $startDate);
+
+        if (auth()->check() && ! auth()->user()->isAdmin()) {
+            $query->whereIn('article_id', Article::query()->visibleTo(auth()->user())->select('id'));
+        }
+
+        $viewsByDate = $query
             ->selectRaw('DATE(viewed_at) as date, COUNT(*) as count')
             ->groupByRaw('DATE(viewed_at)')
             ->pluck('count', 'date');

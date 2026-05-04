@@ -56,24 +56,18 @@ class MediaTable
                 SelectFilter::make('collection_name')
                     ->label('Collection')
                     ->options(function () {
-                        $query = \App\Models\Media::query();
-                        if (auth()->check() && ! auth()->user()->isAdmin()) {
-                            $query->where('user_id', auth()->id());
-                        }
-
-                        return $query->distinct()
+                        return \App\Models\Media::query()
+                            ->visibleTo(auth()->user())
+                            ->distinct()
                             ->pluck('collection_name', 'collection_name')
                             ->toArray();
                     }),
                 SelectFilter::make('model_type')
                     ->label('Model')
                     ->options(function () {
-                        $query = \App\Models\Media::query();
-                        if (auth()->check() && ! auth()->user()->isAdmin()) {
-                            $query->where('user_id', auth()->id());
-                        }
-
-                        return $query->distinct()
+                        return \App\Models\Media::query()
+                            ->visibleTo(auth()->user())
+                            ->distinct()
                             ->pluck('model_type')
                             ->mapWithKeys(fn ($type) => [$type => class_basename($type)])
                             ->toArray();

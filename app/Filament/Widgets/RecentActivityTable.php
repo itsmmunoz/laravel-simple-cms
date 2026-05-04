@@ -49,6 +49,7 @@ class RecentActivityTable extends TableWidget
     protected function getRecentArticlesQuery(): Builder
     {
         return Article::query()
+            ->visibleTo(auth()->user())
             ->with('category')
             ->select([
                 'id',

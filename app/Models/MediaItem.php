@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToOwner;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Spatie\MediaLibrary\HasMedia;
@@ -9,6 +10,7 @@ use Spatie\MediaLibrary\InteractsWithMedia;
 
 class MediaItem extends Model implements HasMedia
 {
+    use BelongsToOwner;
     use InteractsWithMedia;
 
     /**

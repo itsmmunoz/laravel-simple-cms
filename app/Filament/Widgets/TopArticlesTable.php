@@ -21,7 +21,8 @@ class TopArticlesTable extends TableWidget
             ->description('Most viewed articles in the last 30 days')
             ->query(
                 Article::query()
-                    ->withCount(['views' => fn ($query) => $query->where('viewed_at', '>=', now()->subDays(30))])
+                    ->visibleTo(auth()->user())
+                    ->withCount(['views' => fn ($q) => $q->where('viewed_at', '>=', now()->subDays(30))])
                     ->orderByDesc('views_count')
                     ->limit(5)
             )

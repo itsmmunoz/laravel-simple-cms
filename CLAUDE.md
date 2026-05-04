@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A simple content management system built with Laravel 12, Filament PHP 5.3 (admin panel), DaisyUI 5 (frontend), and Lucide Icons. Manages Pages, Articles, Categories, and Media uploads with Spatie Media Library. Frontend is fully internationalized. Content is sanitized with stevebauman/purify to prevent XSS.
+A simple content management system built with Laravel 13, Filament PHP 5.6 (admin panel), DaisyUI 5 (frontend), and Lucide Icons. Manages Pages, Articles, Categories, and Media uploads with Spatie Media Library. Frontend is fully internationalized. Content is sanitized with stevebauman/purify to prevent XSS.
 
 ## Common Commands
 
@@ -195,12 +195,13 @@ $user->isEditor(); // true if editor
 - **View Deduplication**: Article views are deduplicated per IP per 30 minutes via cache
 - **Route Constraints**: All slug routes have `[a-z0-9\-]+` regex constraints
 - **File Upload Validation**: Featured images require explicit MIME type allowlist
-- **Mass Assignment**: `role` field is excluded from `$fillable` on User model. `user_id` is excluded from `$fillable` on Article, Page, and MediaItem — it is auto-assigned in `booted()` hooks, never user-editable
-- **Ownership Authorization**: Articles, Pages, Media, and MediaItems track `user_id` ownership (auto-assigned via model `booted()` hooks)
-- **Policy Enforcement**: A single `OwnerablePolicy` handles authorization for Article, Page, Media, and MediaItem — only admins or resource owners can update/delete records. All models are mapped to it via `Gate::policy()` in `AppServiceProvider`. To customize authorization for a specific model, create a dedicated policy and swap the mapping
-- **Query Scoping**: Non-admin users can only view their own resources in Filament admin panel via `getEloquentQuery()` overrides
+- **CSRF**: `Illuminate\Foundation\Http\Middleware\PreventRequestForgery` (Laravel 13's renamed CSRF middleware; `VerifyCsrfToken` is now a deprecated alias) is wired in `AdminPanelProvider`
+- **Mass Assignment**: `role` field is excluded from `$fillable` on User model. `user_id` is excluded from `$fillable` on Article, Page, Media, and MediaItem — it is auto-assigned in `booted()` hooks, never user-editable
+- **Ownership Authorization**: Articles, Pages, Media, and MediaItems track `user_id` ownership (auto-assigned via model `booted()` hooks). Editors can update/delete their own records OR orphan records (records whose `user_id` was nulled by `nullOnDelete` after the original owner was deleted), so content does not get permanently locked from anyone but admins. `forceDelete` stays admin-only
+- **Policy Enforcement**: A single `OwnerablePolicy` handles authorization for Article, Page, Media, and MediaItem — see `app/Policies/OwnerablePolicy.php`. All models are mapped to it via `Gate::policy()` in `AppServiceProvider`. The user_id comparison casts both sides to `(int)` to remain correct on MySQL where some PDO configurations return BIGINT FK columns as strings. `view`/`viewAny` return `true` unconditionally — actual visibility is enforced at the query layer (see `BelongsToOwner` trait below), not the policy
+- **Query Scoping**: All ownership-aware queries use the `App\Models\Concerns\BelongsToOwner` trait's `visibleTo(?User $user)` scope. Used in: every `getEloquentQuery()` override, every dashboard widget (`StatsOverview`, `RecentActivityTable`, `TopArticlesTable`, `ArticleViewsChart`), the `PageForm` parent_id selector, and the MediaTable filter scopes — single source of truth so policy and listings can never drift apart
 - **Bulk Delete Authorization**: `DeleteBulkAction` uses `authorizeIndividualRecords('delete')` to check per-record policies
-- **Cascade Protection**: `user_id` foreign keys use `nullOnDelete()` to preserve content when a user is deleted (content becomes unowned rather than deleted)
+- **Cascade Protection**: `user_id` foreign keys use `nullOnDelete()` to preserve content when a user is deleted (content becomes orphaned and accessible to other editors)
 
 ### Database
 - SQLite by default (`database/database.sqlite`)
@@ -209,7 +210,7 @@ $user->isEditor(); // true if editor
 ## Key Patterns
 
 ### Slug Generation
-Article and Page models auto-generate slugs from title on creation via `booted()` hooks, with deduplication (appends `-2`, `-3`, etc.). The `HasUniqueSlug` trait (`app/Models/Concerns/`) catches `UniqueConstraintViolationException` on insert and retries with a random suffix to handle race conditions.
+Article and Page models auto-generate slugs from title on creation via `booted()` hooks, with deduplication (appends `-2`, `-3`, etc.). The `HasUniqueSlug` trait (`app/Models/Concerns/`) catches `UniqueConstraintViolationException` on insert and retries with a random suffix to handle race conditions. The trait verifies the violation is actually about the slug column (via an existence check) before mutating the slug — so a violation on a different unique column (e.g., a future email constraint) won't silently corrupt the slug.
 ```php
 // Auto-generation in booted()
 static::creating(function ($model) {
@@ -220,6 +221,27 @@ static::creating(function ($model) {
 
 // Race condition safety via HasUniqueSlug trait on save()
 ```
+
+### Cache Patterns
+The app caches in three places and follows two rules: **cache primitives only** (no Eloquent collections, no Filament `Stat` objects — keeps the payload safe regardless of Laravel 13's `serializable_classes` setting), and **invalidate via model `booted()` hooks**, not TTL alone.
+
+| Cache key                        | Where                                   | TTL    | Invalidated by                                                                                               |
+|----------------------------------|-----------------------------------------|--------|--------------------------------------------------------------------------------------------------------------|
+| `nav_pages`                      | `App\View\Composers\NavigationComposer` | 300s   | `Page::saved`, `Page::deleted`                                                                               |
+| `dashboard_stats:{user_id}`      | `App\Filament\Widgets\StatsOverview`    | 60s    | `Article::saved/deleted`, `Page::saved/deleted` (owner's key), `User::saved` on role change, `User::deleted` |
+| `article_view:{article_id}:{md5(ip)}` | `ArticleController` view dedup          | 30 min | TTL only                                                                                                     |
+
+Cache key for `dashboard_stats` is per-user because admins get extra `totalUsers`/`totalAdmins`/`totalEditors` keys that editors don't — without per-user keys an editor promoted to admin would hit a stale payload and crash with an undefined-key error. The `User::booted()` hook (`if ($user->wasChanged('role'))`) busts the cache on role change to make this safe.
+
+### Adding Ownership to a New Model
+If you add a new model that should follow the same ownership rules as Article/Page/Media:
+
+1. Add a nullable `user_id` foreign key with `nullOnDelete()` in the migration
+2. `use App\Models\Concerns\BelongsToOwner;` on the model
+3. Add the auto-assign hook in `booted()`: `static::creating(fn ($m) => empty($m->user_id) && auth()->check() ? $m->user_id = auth()->id() : null);`
+4. Map the model to `OwnerablePolicy` in `AppServiceProvider::boot()` via `Gate::policy()`
+5. In any Filament resource for it, override `getEloquentQuery()` to call `->visibleTo(auth()->user())`
+6. Exclude `user_id` from `$fillable` so it can't be mass-assigned
 
 ### Published Scopes
 Articles and Pages have `published` scopes for filtering:

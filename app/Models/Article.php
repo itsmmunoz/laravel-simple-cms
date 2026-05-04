@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToOwner;
 use App\Models\Concerns\HasUniqueSlug;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -11,6 +12,7 @@ use Stevebauman\Purify\Facades\Purify;
 
 class Article extends Model
 {
+    use BelongsToOwner;
     use HasUniqueSlug;
 
     /**
@@ -62,6 +64,16 @@ class Article extends Model
                 $article->content = Purify::clean($article->content);
             }
         });
+
+        static::saved(fn (Article $article) => static::forgetDashboardStats($article));
+        static::deleted(fn (Article $article) => static::forgetDashboardStats($article));
+    }
+
+    protected static function forgetDashboardStats(Article $article): void
+    {
+        if ($article->user_id) {
+            cache()->forget('dashboard_stats:'.$article->user_id);
+        }
     }
 
     /**

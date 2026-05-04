@@ -32,7 +32,13 @@ class PageForm
                 Section::make('Settings')
                     ->schema([
                         Select::make('parent_id')
-                            ->relationship('parent', 'title', fn ($query, $record) => $record ? $query->where('id', '!=', $record->id) : $query)
+                            ->relationship('parent', 'title', function ($query, $record) {
+                                if ($record) {
+                                    $query->where('id', '!=', $record->id);
+                                }
+
+                                return $query->visibleTo(auth()->user());
+                            })
                             ->searchable()
                             ->preload(),
                         TextInput::make('slug')
